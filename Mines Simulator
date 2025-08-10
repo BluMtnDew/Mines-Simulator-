@@ -1,0 +1,229 @@
+!DOCTYPE html
+html lang=en
+head
+meta charset=UTF-8 
+meta name=viewport content=width=device-width, initial-scale=1 
+titleMines Board Simulator Enhancedtitle
+style
+  body { font-family Arial, sans-serif; max-width 700px; margin auto; padding 1rem; }
+  input, button, select { font-size 1rem; padding 0.5rem; margin 0.3rem 0; width 100%; box-sizing border-box; }
+  button { cursor pointer; }
+  .board { display grid; grid-template-columns repeat(5, 40px); grid-gap 3px; margin 0.5rem 0; }
+  .cell { width 40px; height 40px; border 1px solid #333; display flex; align-items center; justify-content center; }
+  .diamond { background #4CAF50; color white; font-weight bold; }
+  .highlight { background #FFD700 !important; color black !important; font-weight bold; }
+  .results-container { max-height 600px; overflow-y auto; border 1px solid #ccc; padding 0.5rem; }
+  #exportBtn { margin-top 1rem; }
+style
+head
+body
+
+h2Mines Board Simulator Enhancedh2
+
+labelServer Seed (hex)label
+input id=serverSeed value=b956d140284b90417cc0d04c6e1d164fec0f468736b25b846b17c11d131d7c7a 
+
+labelClient Seed (player seed)label
+input id=clientSeed value=PItSWL9C1U 
+
+labelNonce start (inclusive)label
+input id=nonceStart type=number value=0 
+
+labelNonce end (inclusive)label
+input id=nonceEnd type=number value=200 
+
+labelFilter Resultslabel
+select id=filterSelect
+  option value=allShow All Boardsoption
+  option value=all12Only Boards with All 12 Diamondsoption
+  option value=corner4Boards with All 4 Corner Diamondsoption
+  option value=centerDiamondBoards with Center Tile as Diamond (Position 12)option
+select
+
+button id=simulateBtnSimulate Boardsbutton
+button id=exportBtn disabledExport Results as CSVbutton
+
+div class=results-container id=resultsdiv
+
+script
+ Utility Convert hex string to Uint8Array
+function hexToBytes(hex) {
+  let bytes = new Uint8Array(hex.length  2);
+  for (let i = 0; i  bytes.length; i++) {
+    bytes[i] = parseInt(hex.substr(i2, 2), 16);
+  }
+  return bytes;
+}
+
+ Utility HMAC SHA-256 using Web Crypto API
+async function hmacSHA256(keyHex, message) {
+  const keyBytes = hexToBytes(keyHex);
+  const cryptoKey = await crypto.subtle.importKey(
+    raw,
+    keyBytes,
+    { name HMAC, hash SHA-256 },
+    false,
+    [sign]
+  );
+  const encoder = new TextEncoder();
+  const data = encoder.encode(message);
+  const signature = await crypto.subtle.sign(HMAC, cryptoKey, data);
+  return new Uint8Array(signature);
+}
+
+ Generate 12 unique positions (0-24) from hash bytes
+function generatePositions(hashBytes) {
+  let positions = new Set();
+  let i = 0;
+  while (positions.size  12 && i  hashBytes.length) {
+    positions.add(hashBytes[i] % 25);
+    i++;
+  }
+  return Array.from(positions);
+}
+
+ Render 5x5 board with diamonds marked, with optional highlight
+function renderBoard(diamonds, highlightPositions = []) {
+  const div = document.createElement(div);
+  div.className = board;
+  for (let i = 0; i  25; i++) {
+    const cell = document.createElement(div);
+    cell.className = cell;
+    if (diamonds.includes(i)) {
+      cell.classList.add(diamond);
+    }
+    if (highlightPositions.includes(i)) {
+      cell.classList.add(highlight);
+    }
+    cell.textContent = diamonds.includes(i)  ♦  ;
+    div.appendChild(cell);
+  }
+  return div;
+}
+
+ Filter functions
+function passesFilter(filter, diamonds) {
+  switch(filter) {
+    case all12
+      return diamonds.length === 12;
+    case corner4
+       Check corners positions 0,4,20,24
+      return [0,4,20,24].every(pos = diamonds.includes(pos));
+    case centerDiamond
+       Check center tile position 12
+      return diamonds.includes(12);
+    case all
+    default
+      return true;
+  }
+}
+
+function downloadCSV(results) {
+  const header = Nonce,Diamonds Positionsn;
+  const rows = results.map(r = `${r.nonce},${r.diamonds.join( )}`).join(n);
+  const csvContent = header + rows;
+  const blob = new Blob([csvContent], {type 'textcsv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mines_simulation_results.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+ Async batch simulate with chunking to avoid freezing UI
+async function simulateBatch(serverSeed, clientSeed, nonceStart, nonceEnd, filter) {
+  const chunkSize = 50;  Number of nonces per batch
+  let results = [];
+
+  for(let batchStart = nonceStart; batchStart = nonceEnd; batchStart += chunkSize) {
+    const batchEnd = Math.min(batchStart + chunkSize - 1, nonceEnd);
+
+    let promises = [];
+    for(let nonce = batchStart; nonce = batchEnd; nonce++) {
+      const message = `${clientSeed}${nonce}`;
+      promises.push(
+        hmacSHA256(serverSeed, message).then(hashBytes = {
+          const diamonds = generatePositions(hashBytes);
+          return {nonce, diamonds};
+        })
+      );
+    }
+
+    const batchResults = await Promise.all(promises);
+
+     Filter results
+    const filtered = batchResults.filter(r = passesFilter(filter, r.diamonds));
+    results = results.concat(filtered);
+
+     Update UI progressively
+    renderResults(filtered, nonceStart === batchStart);
+  }
+
+  return results;
+}
+
+ Clear results container and render given results array
+function renderResults(results, clear = false) {
+  const container = document.getElementById(results);
+  if(clear) container.innerHTML = ;
+
+  for(let r of results) {
+    const header = document.createElement(h4);
+    header.textContent = `Nonce ${r.nonce} — Diamonds [${r.diamonds.join(, )}]`;
+    container.appendChild(header);
+    const highlightPositions = [];  Could customize per filter here if needed
+    const boardDiv = renderBoard(r.diamonds, highlightPositions);
+    container.appendChild(boardDiv);
+  }
+}
+
+document.getElementById(simulateBtn).addEventListener(click, async () = {
+  const serverSeed = document.getElementById(serverSeed).value.trim();
+  const clientSeed = document.getElementById(clientSeed).value.trim();
+  let nonceStart = parseInt(document.getElementById(nonceStart).value);
+  let nonceEnd = parseInt(document.getElementById(nonceEnd).value);
+  const filter = document.getElementById(filterSelect).value;
+
+  if (!serverSeed  !clientSeed  isNaN(nonceStart)  isNaN(nonceEnd)  nonceStart  nonceEnd) {
+    alert(Please enter valid inputs.);
+    return;
+  }
+
+   Disable buttons while running
+  document.getElementById(simulateBtn).disabled = true;
+  document.getElementById(exportBtn).disabled = true;
+
+  document.getElementById(results).innerHTML = pSimulating... please wait.p;
+
+  try {
+    const results = await simulateBatch(serverSeed, clientSeed, nonceStart, nonceEnd, filter);
+
+    if (results.length === 0) {
+      document.getElementById(results).innerHTML = pNo results matched the filter.p;
+    }
+
+     Enable export if we have results
+    document.getElementById(exportBtn).disabled = results.length === 0;
+     Store results for export
+    window.simulationResults = results;
+
+  } catch (e) {
+    alert(Error during simulation  + e.message);
+  }
+
+  document.getElementById(simulateBtn).disabled = false;
+});
+
+document.getElementById(exportBtn).addEventListener(click, () = {
+  if (window.simulationResults && window.simulationResults.length  0) {
+    downloadCSV(window.simulationResults);
+  } else {
+    alert(No results to export.);
+  }
+});
+script
+
+body
+html
